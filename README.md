@@ -112,4 +112,62 @@ The first part simply does some printing and logging, so we'll be skipping that 
 3. We hook `OslArchTransferToKernel` and divert control to `OslArchTransferToKernelHook`. Note this is a different kind of hook! The previous EFI hook was done with function pointers, but the transition to `OslArchTransferToKernel` does not involve function pointers, so we rely on Trampoline hooking, which is a fancy way of saying we patch the assembly to jump somewhere else.
 4. We restore the `ExitBootServices` function which we saved easlier and invoke it to transfer control back to `winload`.
 
+In this code we relied on some utility functions that were also implemented, let's understand them as well.
 
+#### memory::get_image_base
+This function finds the base image of an address, heuristically, by going back one page (0x1000 bytes) back each time and seeing if it has a PE header ("MZ" bytes):
+
+```c
+uint64_t memory::get_image_base(uint64_t address)
+{
+	address = address & ~0xFFF;
+
+	do {
+		uint16_t value = *(uint16_t*)address;
+
+		if (value == 0x5a4d)
+		{
+			return address;
+		}
+
+		address -= 0x1000;
+	} while (address != 0);
+
+	return address;
+}
+```
+
+The `address & ~0xFFF;` operation simply performs memory alignment to a page (making it divisible by `0x1000` which is a page size).  
+From that point of we get the 16-bit value of each memory page and compare to `0x5a4d` (reverse "MZ" since we work in a [Little-Endian](https://en.wikipedia.org/wiki/Endianness) architecture).  
+If there is a match then we found the PE file base, otherwise we simply go back one page and try again.
+
+#### memory::scan_section
+This function finds a set of bytes (as I mentioned, similar to [memmem](https://www.man7.org/linux/man-pages/man3/memmem.3.html)) but in a defined PE section.  
+When we called this function we called it with `".text"`, which is where code commonly resides in PE files.
+
+```c
+uint64_t memory::scan_section(uint64_t base_addr, const char* section, uint8_t* pattern, uint64_t pattern_size)
+{
+	uint64_t section_address = memory::get_section_address(base_addr, section);
+	uint32_t section_size = memory::get_section_size(base_addr, section);
+
+	for (uint64_t i = 0; i < section_size; ++i)
+	{
+		uint64_t current_address = section_address + i;
+
+		if (memory::compare(pattern, (uint8_t*)current_address, pattern_size) == 0)
+		{
+			return current_address;
+		}
+	}
+
+	return 0;
+}
+```
+
+Assuming `memory::get_section_address` gets the section address and `memory::get_section_size` gets the section size, it becomes easy to understand what this code does - it goes byte by byte and compares memory with the pattern.  
+There is a minor bug here, by the way - the variable `i` should iterate between `0` and the `section_size` *minus the pattern length*, othersise there might be memory reads outside of the section's limits.  
+However, this doesn't really affect anything (keep in mind there are still no memory protection enforcements at this point) so this bug doesn't realistically manifest to anything noticable.  
+Resolving the section address and size by their name is an easy exercise in PE parsing and I will not be covering it, code still exists under `Bootkit/memory.cpp` if you're interested.
+
+#### trampoline::Hook
