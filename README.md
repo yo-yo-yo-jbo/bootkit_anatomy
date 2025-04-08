@@ -29,45 +29,37 @@ Furthermore, GRUB2 is coded in C, which is considered a memory-unsafe language, 
 As we explained, finding a vulnerability in an OEM-trusted bootloader (such as GRUB2) means attackers might be able to bypass Secure Boot.  
 Since bootloader usually handle complex inputs, coded in unsafe languages, implement their own heap and do not use modern mitigations - getting arbitrary code execution is quite likely.  
 Assuming an attacker is able to achieve arbitrary code execution - what should they do?  
-For this I'd like to examine one Bootkit - let's take BlackLotus ([found on Github](https://github.com/ldpreload/BlackLotus/tree/main)) as a modern example.  
-Let us examine some source code!
+For this I'd like to examine one Bootkit - initially I wanted to examine BlackLotus ([found on Github](https://github.com/ldpreload/BlackLotus/tree/main)) as a modern example, but the source code there actually is missing several key functions used there (and yes, it won't compile).  
+I did find one very similar to it called [Calypso](https://github.com/3a1/Calypso/), which is way easier to read, so I will be sticking to it mostly.  
+With that, let us examine some source code!  
+Remark: in this analysis, I might be skipping some code to make this blogpost more comprehensible. 
 
 ### Hooking EFI services
-This Bootkit is compiled as an EFI module - essentially, a PE file that can be loaded through UEFI. Therefore, its code will start at `src/Bootkit/EfiMain.c`. What does it do?  
+This Bootkit is compiled as an EFI module - essentially, a PE file that can be loaded through UEFI. Therefore, its code will start at an `EfiMain` function, located in `Bootkit/main.cpp`:
 ```c
-	/* Calculate the complete length of the current shellcode */
-	Len = ( U_PTR( GetIp() ) + 11 ) - U_PTR( G_PTR( EfiMain ) );
+EXTERN_C EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE* SystemTable)
+{
+    global::RuntimeServices = SystemTable->RuntimeServices;
+    global::BootServices    = SystemTable->BootServices;
+    global::SystemTable     = SystemTable;
 
-	/* Calculate the number of pages needed for the allocation */
-	Pct = ( ( ( Len + 0x1000 - 1 ) &~ ( 0x1000 - 1 ) ) / 0x1000 );
+    global::ExitBootServices = global::BootServices->ExitBootServices;
+    global::BootServices->ExitBootServices = ExitBootServicesWrapper;
 
-	/* Allocate the pages for the shellcode */
-	if ( SystemTable->BootServices->AllocatePages( AllocateAnyPages, EfiRuntimeServicesData, Pct, &Epa ) == EFI_SUCCESS ) {
+    global::BootServices->CreateEvent(EVT_SIGNAL_VIRTUAL_ADDRESS_CHANGE, TPL_NOTIFY, NotifySetVirtualAddressMap, NULL, &global::NotifySetVirtualAddressMapEvent);
 
-		/* Save a copy of the handler */
-		Eft = C_PTR( G_PTR( EfTbl ) );
-		Eft->ExitBootServices = C_PTR( SystemTable->BootServices->ExitBootServices );
-
-		/* Copy over the shellcode */
-		__builtin_memcpy( C_PTR( Epa ), C_PTR( G_PTR( EfiMain ) ), Len );
-
-		/* Insert hooks into the handler */
-		SystemTable->BootServices->ExitBootServices = C_PTR( U_PTR( Epa ) + ( G_PTR( ExitBootServicesHook ) - G_PTR( EfiMain ) ) );
-	};
-
+    return EFI_SUCCESS;
+}
 ```
 
-In a nutshell, this code:
-1. Allocates pages (uses UEFI services to do so) for its own code (done with `SystemTable->BootServices->AllocatePages`) and copies its own code there. Note `GetIp` simply gets the `IP` (Instruction Pointer) register through a simple `call-pop` trick (which I covered [in a previous blogpost](https://github.com/yo-yo-yo-jbo/msf_shellcode_analysis/)).
-2. Overrides `SystemTable->BootServices->ExitBootServices`, which are the services that are invoked once UEFI exits and passes control to the Bootloader. Now we understand why allocation was essential - EFI modules are unloaded from memory once UEFI exits, so this ensures Bootkit survives in memory. Note how easy it is to hook UEFI services!  
-This hook will essentially be called whenever `ExitBootServices` is invoked.
-
-### The ExitBootServices hook
-Next we move to the `ExitBootServices.c` file, which includes the function `ExitBootServices`.  
-
-
-
-
+Each `EFI` module gets a pointer to a `SystemTable` which contains a bunch of other tables, which contain function pointers.  
+Just like an old bootloader used to call `BIOS interrupts` to use as services (e.g. reading the disk or printing to the terminal), so do `EFI` modules get capabilities.  
+The most important piece here is the [BootServices](https://uefi.org/specs/UEFI/2.9_A/07_Services_Boot_Services.html) which contain several functions.  
+With that out of the way, the code here is very easy!
+1. It saves several pointers in a global namespace (the services and the system table itself).
+2. It saves the function pointer to `ExitBootServices` in that global as well, and then hooks it with the `ExitBootServicesWrapper` function. Note `ExitBootServices` is called just before the handoff to the OS kernel, so that's an excellent point to hook! Also note how easy it is to hook when you have function pointers and no page protections - essentially it's a single assignment in C!
+3. It creates a callback for `SetVirtualAddressMap`, which we'll be using later.
+With that, let's continue to the `ExitBootServicesWrapper` function!
 
 
 
