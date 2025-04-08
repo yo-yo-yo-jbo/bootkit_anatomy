@@ -171,3 +171,30 @@ However, this doesn't really affect anything (keep in mind there are still no me
 Resolving the section address and size by their name is an easy exercise in PE parsing and I will not be covering it, code still exists under `Bootkit/memory.cpp` if you're interested.
 
 #### trampoline::Hook
+This function performs Trampoline hooking, i.e. patching the target's machine code with other instructions.  
+It's implemented in `Bootkit/trampoline.cpp` and quite easy to understand:
+
+```c
+void trampoline::Hook(uint64_t function, uint64_t hook, uint8_t* original_data)
+{
+	uint8_t trampoline[] = 
+	{
+		0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* movabs rax, <address> */
+		0xFF, 0xE0													/* jmp rax				 */
+	};
+	memory::copy(&hook, (uint64_t*)((uint8_t*)trampoline + 2), sizeof(uint64_t));
+
+	memory::copy((uint64_t*)function, (uint64_t*)original_data, TRAMPOLINE_SIZE);
+
+	memory::copy_wp((uint64_t*)trampoline, (uint64_t*)function, TRAMPOLINE_SIZE);
+}
+```
+
+The trampoline is easy - performs `movabs rax, <address>` and then `jmp rax` to make an absolute jump.  
+We do 3 copies:
+1. Copy the `hook` value into `trampoline + 2`, which will replace the zeros in the `trampoline` byte array.
+2. Copy original `TRAMPOLINE_SIZE` (12) bytes to the `original_data`, since we are going to override those bytes.
+3. Copy the `trampoline` bytes into the function, thus installing the hook.
+
+Since we are not in a multi-threaded environment, there are no dangers with that last copy - in a multi-threaded environment you'd have a risk of having some code run in the middle of copying.  
+A funny story is that I actually saw that happen live, in a MITRE evaluation - with the exact inline hooking approach - you can read all about it [here](https://www.microsoft.com/en-us/security/blog/2020/06/11/blue-teams-helping-red-teams-a-tale-of-a-process-crash-powershell-and-the-mitre-attck-evaluation/).
