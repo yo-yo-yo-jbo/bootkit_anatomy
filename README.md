@@ -59,9 +59,11 @@ This Bootkit is compiled as an EFI module - essentially, a PE file that can be l
 
 In a nutshell, this code:
 1. Allocates pages (uses UEFI services to do so) for its own code (done with `SystemTable->BootServices->AllocatePages`) and copies its own code there. Note `GetIp` simply gets the `IP` (Instruction Pointer) register through a simple `call-pop` trick (which I covered [in a previous blogpost](https://github.com/yo-yo-yo-jbo/msf_shellcode_analysis/)).
-2. Overrides `SystemTable->BootServices->ExitBootServices`, which are the services that are invoked once UEFI exits and passes control to the Bootloader. Now we understand why allocation was essential - EFI modules are unloaded from memory once UEFI exits, so this ensures Bootkit survives in memory. Note how easy it is to hook UEFI services!
+2. Overrides `SystemTable->BootServices->ExitBootServices`, which are the services that are invoked once UEFI exits and passes control to the Bootloader. Now we understand why allocation was essential - EFI modules are unloaded from memory once UEFI exits, so this ensures Bootkit survives in memory. Note how easy it is to hook UEFI services!  
+This hook will essentially be called whenever `ExitBootServices` is invoked.
 
-
+### The ExitBootServices hook
+Next we move to the `ExitBootServices.c` file, which includes the function `ExitBootServices`.  
 
 
 
