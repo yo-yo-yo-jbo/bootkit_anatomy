@@ -58,7 +58,7 @@ The most important piece here is the [BootServices](https://uefi.org/specs/UEFI/
 With that out of the way, the code here is very easy!
 1. It saves several pointers in a global namespace (the services and the system table itself).
 2. It saves the function pointer to `ExitBootServices` in that global as well, and then hooks it with the `ExitBootServicesWrapper` function. Note `ExitBootServices` is called just before the handoff to the OS kernel, so that's an excellent point to hook! Also note how easy it is to hook when you have function pointers and no page protections - essentially it's a single assignment in C!
-3. It creates a callback for `SetVirtualAddressMap`, which we'll be using later.
+3. It creates a callback for `SetVirtualAddressMap`, which we'll be using later.  
 With that, let's continue to the `ExitBootServicesWrapper` function!
 
 
