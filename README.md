@@ -167,7 +167,7 @@ uint64_t memory::scan_section(uint64_t base_addr, const char* section, uint8_t* 
 
 Assuming `memory::get_section_address` gets the section address and `memory::get_section_size` gets the section size, it becomes easy to understand what this code does - it goes byte by byte and compares memory with the pattern.  
 There is a minor bug here, by the way - the variable `i` should iterate between `0` and the `section_size` *minus the pattern length*, othersise there might be memory reads outside of the section's limits.  
-However, this doesn't really affect anything (keep in mind there are still no memory protection enforcements at this point) so this bug doesn't realistically manifest to anything noticable.  
+However, this doesn't really affect anything (keep in mind there are still no memory protection enforcements at this point when it comes to reading, at least) so this bug doesn't realistically manifest to anything noticable.  
 Resolving the section address and size by their name is an easy exercise in PE parsing and I will not be covering it, code still exists under `Bootkit/memory.cpp` if you're interested.
 
 #### trampoline::Hook
@@ -197,4 +197,25 @@ We do 3 copies:
 3. Copy the `trampoline` bytes into the function, thus installing the hook.
 
 Since we are not in a multi-threaded environment, there are no dangers with that last copy - in a multi-threaded environment you'd have a risk of having some code run in the middle of copying.  
-A funny story is that I actually saw that happen live, in a MITRE evaluation - with the exact inline hooking approach - you can read all about it [here](https://www.microsoft.com/en-us/security/blog/2020/06/11/blue-teams-helping-red-teams-a-tale-of-a-process-crash-powershell-and-the-mitre-attck-evaluation/).
+A funny story is that I actually saw that happen live, in a MITRE evaluation - with the exact inline hooking approach - you can read all about it [here](https://www.microsoft.com/en-us/security/blog/2020/06/11/blue-teams-helping-red-teams-a-tale-of-a-process-crash-powershell-and-the-mitre-attck-evaluation/).  
+One minor detail is the difference between `memory::copy` and `memory::copy_wp`, which is quite interesting in my opinion.  
+Well, `memory::copy` performs the equivalent of [memcpy](https://man7.org/linux/man-pages/man3/memcpy.3.html) (with sub-optimal performance, but I won't talk about that aspect too much) and is trivial.  
+The `memory::copy_wp` function is more interesting - it called `memory::copy` wrapped between `__disable_wp` and `__enable_wp` calls. What are those?  
+Let's examine `__disable_wp` (`__enable_wp`) does the exact opposite) - it's implemented under `Bootkit/wp.asm`:
+
+```assembly
+__disable_wp proc
+    cli
+    mov rax, cr0
+    and rax, 0FFFEFFFFh
+    mov cr0, rax
+    sti                        
+    ret
+__disable_wp endp
+```
+
+This procedure:
+1. Disables all interrupts with `cli`.
+2. Modifies the `cr0` register by performing a bitwise AND of it with `0FFFEFFFFh`, which essentially zeros the 16th bit. The 16th bit in the `cr0` register is the `WP` (Write-Protection) bit, which essentially ensures we can write to Read-Only pages. The `cr0` register has other interesting flags that affect how the machine operates - you can read more about it here[https://en.wikipedia.org/wiki/Control_register]).
+3. Enables interrupts with `sti`.
+
