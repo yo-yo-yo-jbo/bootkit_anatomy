@@ -266,4 +266,6 @@ EFI_STATUS EFIAPI OslArchTransferToKernelHook(uint64_t loader_block_addr, uint64
 ```
 
 1. At first, we unhook the `OslArchTransferToKernel` original function back. The function `trampoline::Unhook` simply copies the data we backed up earlier (the 12 original bytes) so I will not be ccovering it in detail (it's a one-liner really).
-2. 
+2. We resolve the base of the kernel PE image ("ntoskrnl.exe") from the input `loader_block_addr->LoadOrderListHead`. This is acquired through reverse engineering, but kind of well-known at this point (e.g. [here](https://www.geoffchappell.com/studies/windows/km/ntoskrnl/inc/api/arc/loader_parameter_block.htm)).
+3. At this point we look for the `NtUnloadKey` routine in the `ntoskrnl.exe` module, `CmUnloadKey` function as well and save them. Note there are two patterns of each of those - most likely to account for different Windows versions.
+4. We perform a similar trampoline hooking on `NtUnloadKey` to `NtUnloadKeyHookAddress`, and pass control to the original `OslArchTransferToKernel`. Note it was critical to unhook the original function first, otherwise calling `OslArchTransferToKernel` would recursively call the trampoline.
