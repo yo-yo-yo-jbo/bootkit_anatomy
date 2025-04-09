@@ -1,6 +1,6 @@
 # The anatomy of a Bootkit
 This year I [discovered](https://www.microsoft.com/en-us/security/blog/2025/03/31/analyzing-open-source-bootloaders-finding-vulnerabilities-faster-with-ai/) some interesting vulnerabilities in [GRUB2](https://www.gnu.org/software/grub/), the de-facto Linux bootloader standard.  
-But why are vulnerabilities in a bootloader are so interesting? That's what I'd like to explain today.  
+But why are vulnerabilities in a bootloader so interesting? That's what I'd like to explain today.  
 
 ## GRUB2 and Secure Boot
 Before 2006, Intel-based computers booted into startup firmware code commonly known as the [BIOS](https://en.wikipedia.org/wiki/BIOS) (Basic Input/Output System), which was responsible for hardware initialization and setup of common services to later be used by a [bootloader](https://en.wikipedia.org/wiki/Bootloader). Ultimately, the BIOS would transfer control to a Bootloader coded in Real Mode, which would commonly load an operating system.  
