@@ -1,4 +1,4 @@
-# The anatomy of a bootkit
+# The anatomy of a Bootkit
 This year I [discovered](https://www.microsoft.com/en-us/security/blog/2025/03/31/analyzing-open-source-bootloaders-finding-vulnerabilities-faster-with-ai/) some interesting vulnerabilities in [GRUB2](https://www.gnu.org/software/grub/), the de-facto Linux bootloader standard.  
 But why are vulnerabilities in a bootloader are so interesting? That's what I'd like to explain today.  
 
