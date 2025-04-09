@@ -269,3 +269,18 @@ EFI_STATUS EFIAPI OslArchTransferToKernelHook(uint64_t loader_block_addr, uint64
 2. We resolve the base of the kernel PE image ("ntoskrnl.exe") from the input `loader_block_addr->LoadOrderListHead`. This is acquired through reverse engineering, but kind of well-known at this point (e.g. [here](https://www.geoffchappell.com/studies/windows/km/ntoskrnl/inc/api/arc/loader_parameter_block.htm)).
 3. At this point we look for the `NtUnloadKey` routine in the `ntoskrnl.exe` module, `CmUnloadKey` function as well and save them. Note there are two patterns of each of those - most likely to account for different Windows versions.
 4. We perform a similar trampoline hooking on `NtUnloadKey` to `NtUnloadKeyHookAddress`, and pass control to the original `OslArchTransferToKernel`. Note it was critical to unhook the original function first, otherwise calling `OslArchTransferToKernel` would recursively call the trampoline.
+
+Here in the last part there is a minor subtle detail - where does `global::NtUnloadKeyHookAddress` come from?  
+Looking at references to it we see it's being assigned at `Bootkit/main.cpp`:
+
+```c
+VOID EFIAPI NotifySetVirtualAddressMap(EFI_EVENT Event, VOID* Context)
+{
+    global::NtUnloadKeyHookAddress = (uint64_t)NtUnloadKeyHook;
+    global::RuntimeServices->ConvertPointer(0, (void**)&global::NtUnloadKeyHookAddress);
+}
+```
+
+If you recall, this is a callback we assigned at the beginning of this analysis! Why is it necessary?  
+Well, up till this point, all the addresses we were dealing with were physcal addresses, but now, with `NtUnloadKey`, we'd like to hook virtual addresses.  
+Therefore, we'd like to get the pointer to `NtUnloadKeyHook` *in virtual addresses*, which we do get by calling the `ConvertPointer` UEFI service!
