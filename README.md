@@ -216,6 +216,10 @@ __disable_wp endp
 
 This procedure:
 1. Disables all interrupts with `cli`.
-2. Modifies the `cr0` register by performing a bitwise AND of it with `0FFFEFFFFh`, which essentially zeros the 16th bit. The 16th bit in the `cr0` register is the `WP` (Write-Protection) bit, which essentially ensures we can write to Read-Only pages. The `cr0` register has other interesting flags that affect how the machine operates - you can read more about it here[https://en.wikipedia.org/wiki/Control_register]).
+2. Modifies the `cr0` register by performing a bitwise AND of it with `0FFFEFFFFh`, which essentially zeros the 16th bit. The 16th bit in the `cr0` register is the `WP` (Write-Protection) bit, which essentially ensures we can write to Read-Only pages. The `cr0` register has other interesting flags that affect how the machine operates - you can read more about it [here](https://en.wikipedia.org/wiki/Control_register).
 3. Enables interrupts with `sti`.
 
+So, at this point we have inline-hooked the `OslArchTransferToKernel` function - let's continue!
+
+### Hooking NtUnloadKey
+Function `OslArchTransferToKernelHook` is implemented in `Bootkit/OslArchTransferToKernel.cpp` and is supposed to be called instead of `OslArchTransferToKernel` due to the inline (Trampoline) hooking.  
