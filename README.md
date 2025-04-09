@@ -398,3 +398,15 @@ From there, it seems we get a target process ID (`pid`) from the user and perfor
 
 This is a bit dangerous since the `0x4b8` offset might change between Windows build versions - I have a better technique that I used to use in the past that dynamically resolves the token offset based on how it's supposed to look like and finding it similarly to the memory search approach the author of this bootkit has done for finding function patterns in modules.  
 With this, a userland program can simply call `NtUnloadKey` (which is a System service which normally comes from `ntdll.dll`) and supply the command they wish to run. With arbitrary read and write abilities, the userland process can control the entire kernel!
+
+## Summary
+I uploaded the flow from the great [Calypso bootkit Github project](https://github.com/3a1/Calypso) which captures the entire flow really well:
+![Bootkit workflow - Calypso](workflow.png)
+
+There is one more subject I haven't touched on - my GRUB2 bootloader vulnerabilities could essentially run a bootkit like Calypso and own Windows in a similar way even if [Secure Boot](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/oem-secure-boot) is on, but it wouldn't be able to defeat [Bitlocker](https://learn.microsoft.com/en-us/windows/security/operating-system-security/data-protection/bitlocker/)! Why is that? Well, I might create a second blogpost on Measured Boot - let me know if you are interested!  
+
+Cheers again to the owner of Calypso - [3a1](https://github.com/3a1).  
+
+Stay tuned!
+
+Jonathan Bar Or
