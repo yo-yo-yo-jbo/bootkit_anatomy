@@ -409,4 +409,4 @@ Cheers again to the owner of Calypso - [3a1](https://github.com/3a1).
 
 Stay tuned!
 
-Jonathan Bar Or
+Jonathan Bar Or (https://jonathanbaror.com)
